@@ -27,7 +27,7 @@ def maketcp(ip, port):
         print("error message")
 
 
-def receiveOffer(self):
+def receiveOffer():
     message, server_address = udpSocket.recvfrom(MESSAGE_LENGTH)
     cookie, msg_type, tcp_port = struct.unpack('IBH', message)
     return cookie, msg_type, tcp_port, server_address
@@ -35,6 +35,7 @@ def receiveOffer(self):
 
 def startClient():
     makeUdp()
+    print("Listening...")
     cookie,msg_type ,tcp_port,server_address = receiveOffer()
     if cookie == COOKIE and msg_type == MSG_TYPE:
         maketcp(server_address[0],tcp_port)
@@ -47,3 +48,5 @@ def startClient():
         tcpSocket.close()
         print("Server Disconnected")
 
+if __name__ == "__main__":
+    startClient()
