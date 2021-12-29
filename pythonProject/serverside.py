@@ -9,16 +9,14 @@ UDP_DEST_PORT = 13117
 tcpSocket = None
 udpSocket = None
 SERVER_IP = socket.gethostbyname(socket.gethostname())
-SERVER_PORT = 5069
 MAX_CLIENTS = 2
 CONNECTED_CLIENTS = 0
 SCK1 = None
 SCK2 = None
 FORMAT = "utf-8"
 MESSAGE_LENGTH = 1024
-ANSWER_TIME = 10
-TEAMS =[]
-TEAMS_ADDRESSES = []
+ANSWER_TIME = 20
+TEAMS = []
 magic_cookie = 0xabcddcba
 msg_byte = 0x2
 threadlock = threading.Lock()
@@ -46,7 +44,6 @@ class Colors:
     GREEN = "\033[0;32m"
     PURPLE = "\033[95m"
     YELLOW = "\033[93m"
-    RESET = "\033[0;0m"
 
 
 def make_udp():
@@ -57,46 +54,39 @@ def make_udp():
 
 
 def udp_broadcast():
+    global udpSocket
     make_udp()
     while CONNECTED_CLIENTS < MAX_CLIENTS:
-        data = struct.pack('IBH', magic_cookie, msg_byte, SERVER_PORT)
+        data = struct.pack('IBH', magic_cookie, msg_byte, tcpSocket.getsockname()[1])
         udpSocket.sendto(data, (BROADCAST_IP, UDP_DEST_PORT))
         time.sleep(1)
     udpSocket.close()
+    udpSocket = None
 
 def init_tcp_server():
     global tcpSocket
     try:
         tcpSocket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        tcpSocket.bind((SERVER_IP,SERVER_PORT))
+        tcpSocket.bind((SERVER_IP, 0)) #using the number 0 binds us to a random open tcp port
         tcpSocket.listen(2)
     except Exception as e:
         raise e
 
-
 #should make it better somehow
 def getTeamName(conn , addr):
-    global TEAM1, TEAM2
-    end = time.time() + ANSWER_TIME
-    while time.time() < time.time()+50 :
-        try:
-            threadlock.acquire()
-            if TEAM1 == "":
-                print("check1")
-                TEAM1 = conn.recv(MESSAGE_LENGTH).decode(FORMAT)
-                threadlock.release()
-                break
-            elif TEAM2 == "":
-                TEAM2 = conn.recv(MESSAGE_LENGTH).decode(FORMAT)
-                print("check2")
-                threadlock.release()
-                break
-        except :
-            pass
+    global TEAMS
+    conn.settimeout(ANSWER_TIME) #time out for the socket methods
+    try:
+        name = conn.recv(MESSAGE_LENGTH).decode(FORMAT)
+        conn.settimeout(None)  # back to blocking
+        #lock?
+        TEAMS.append(name)
+    except:
+        pass
 
 def send_teams_andQ():
     questions = QuestionsBank().random_question()
-    msg = "Welcome to Quick Maths.\nPlayer 1: " + TEAM1 + "\nPlayer 2: " + TEAM2 + \
+    msg = "Welcome to Quick Maths.\nPlayer 1: " + TEAMS[0] + "\nPlayer 2: " + TEAMS[1] + \
           f"\n====\n Please answer the following question as fast as you can: \n {questions[0]}\n"
     msg = msg.encode(FORMAT)
     try:
@@ -114,10 +104,10 @@ def decide_winner(answer):
     while time.time() < end and not winner:
         try:
             if int(SCK1.recv(MESSAGE_LENGTH).decode(FORMAT)) == answer:
-                team = TEAM1
+                team = TEAMS[0]
                 winner = True
             elif int(SCK2.recv(MESSAGE_LENGTH).decode(FORMAT)) == answer:
-                team = TEAM2
+                team = TEAMS[1]
                 winner = True
             else:
                 print("no winner")
@@ -138,18 +128,12 @@ def decide_winner(answer):
         pass
 
 
-
-def reset():
-    global  CONNECTED_CLIENTS, SCK1, SCK2
-    CONNECTED_CLIENTS = 0
-    SCK1 = None
-    SCK2 = None
-
-def start():
-    global CONNECTED_CLIENTS ,tcpSocket ,SCK1, SCK2
+def start(first_time):
+    global CONNECTED_CLIENTS ,tcpSocket ,SCK1, SCK2, TEAMS
+    if first_time:
+        init_tcp_server() #makes the tcp server
     broadcast = threading.Thread(target= udp_broadcast , args=()) #will make the broadcasting socket
     broadcast.start()
-    init_tcp_server() #makes the tcp server
     print(f"Server started, listening on IP address {SERVER_IP}")
     threads = []
     while CONNECTED_CLIENTS < MAX_CLIENTS:
@@ -157,11 +141,9 @@ def start():
             conn,addr = tcpSocket.accept()
             if CONNECTED_CLIENTS == 0: #MAYBE CHANGE
                 SCK1 = conn
-                print("client 1 connected")
             else:
                 SCK2 = conn
-                print("client 2 connected")
-            thread = threading.Thread(target=getTeamName, args=(conn, addr))
+            thread = threading.Thread(target=getTeamName, args=(conn,addr))
             threads.append(thread)
             CONNECTED_CLIENTS += 1
         except Exception as e:
@@ -172,22 +154,37 @@ def start():
         thread.start()
     for thread in threads:
         thread.join()
-    if TEAM1 == "" or TEAM2 == "":
-        print("should start all over")
-    else:
+    if len(TEAMS) != 2 :
+        message = "There is a team with no name - Disconnectin teams  and reseting the game! \n"
+        try: #reseting data for next batch
+            SCK1.sendall(message)
+            SCK2.sendall(message)
+            SCK1.close()
+            SCK2.close()
+            SCK1 = None
+            SCK2 = None
+            CONNECTED_CLIENTS = 0
+            TEAMS = []
+            start(False)
+        except:
+            pass
+    else: #both have written there names and are ready to brawl
         answer = send_teams_andQ()
-        print("before decide winner")
         decide_winner(answer)
-        print("after decide winner")
         try:
             SCK1.close()
             SCK2.close()
+            SCK1 = None
+            SCK2 = None
+            CONNECTED_CLIENTS = 0
+            TEAMS = []
+            start(False)
         except:
-            print("An exception occurred")
+            pass
 
 
 if __name__ == "__main__":
-        start()
+        start(True)
 
 
 
