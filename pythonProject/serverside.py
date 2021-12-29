@@ -5,37 +5,49 @@ import random
 import struct
 
 BROADCAST_IP = '255.255.255.255'
-UDP_DEST_PORT = 13117#v
+UDP_DEST_PORT = 13117
 tcpSocket = None
 udpSocket = None
-SERVER_IP = socket.gethostbyname(socket.gethostname())#v
-SERVER_PORT = 5051
+SERVER_IP = socket.gethostbyname(socket.gethostname())
+SERVER_PORT = 5069
 MAX_CLIENTS = 2
-CONNECTED_CLIENTS = 0#v
+CONNECTED_CLIENTS = 0
 SCK1 = None
 SCK2 = None
 FORMAT = "utf-8"
-MESSAGE_LENGTH = 1024#v
+MESSAGE_LENGTH = 1024
 ANSWER_TIME = 10
-TEAMS = []
+TEAMS =[]
 TEAMS_ADDRESSES = []
-magic_cookie = 0xabcddcba#v
-msg_byte = 0x2#v
+magic_cookie = 0xabcddcba
+msg_byte = 0x2
 threadlock = threading.Lock()
 
 
-class SimpleQuestions:
+class QuestionsBank:
     def __init__(self):
-        self.questions = [("17 * 2 - 29 = ?", 5), ("(45 + 54) / 11 = ?", 9), ("(35 + 27 - 18) / 11 = ?", 4), ("2 + 3 = ?", 5),
-                          ("(40 + 40) / 10 = ?", 8), ("1 + 2 + 5 - 6 = ?", 2), ("3! = ?", 6), ("(34 - 12 + 17 - 9) * 0 = ?", 0),
-                          ("(72 - 2 - 10 - 20) / 10 = ?", 4), ("42 / 7 = ?", 6), ("0.5 * 0.5 * 4 = ?", 1), ("1 + 1 + 1 + 1 + 1 + 1 * 0 + 1 + 1 = ?", 7),
-                          ("e^0 = ?", 1), ("ln(1) = ?", 0), ("ln(e) = ?", 1), ("ln(1/e) + 1 = ?", 0), ("f(x)=x^2, f'(2) = ?", 4),
-                          ("f'(x)=2x, f(3) = ?", 9), ("2x + 3 = 7, x = ?", 2), ("7x - 6 = 8, x = ?", 2), ("2 * 3", 6),("e - (e - 2)", 2),
-                          ("25 / 5 = ?", 5), ("2 cats and 1 chickens have ? legs", 9), ("5 + 5 - 1 = ?", 9), ("if anny has 5 apples and danny 4, how much is 5 + 1?", 6),
-                          ("how many pants is a pair of pants", 1), ("3 * 3 / 3 * 3 / 3 * 3 / 3", 3)
-                          ]
-    def getQ(self):
+        self.questions = [("17 * 2 - 29 = ?", 5),
+                          ("50 + 50 - 91 = ?", 9),
+                          ("1 + 1 + 1 + 2 + 2  = ?", 7),
+                          ("f'(x)=2x, f(3) = ?", 9),
+                          ("2x - 3 = 7, x = ?", 5),
+                          ("7x - 6 = 8, x = ?", 2),
+                          ("2 * 3", 6),
+                          ("e - (e - 2)", 2),
+                          ("25 / 5 = ?", 5),
+                          ("5 + 5 - 1 = ?", 9)
+                          ,("3 * 3 * 3 / 9 =?", 3) ]
+    def random_question(self):
         return self.questions[random.randint(0, len(self.questions)-1)]
+
+class Colors:
+    RED = "\033[1;31m"
+    BLUE = "\033[1;34m"
+    GREEN = "\033[0;32m"
+    PURPLE = "\033[95m"
+    YELLOW = "\033[93m"
+    RESET = "\033[0;0m"
+
 
 def make_udp():
     global udpSocket
@@ -47,7 +59,6 @@ def make_udp():
 def udp_broadcast():
     make_udp()
     while CONNECTED_CLIENTS < MAX_CLIENTS:
-        # lock?
         data = struct.pack('IBH', magic_cookie, msg_byte, SERVER_PORT)
         udpSocket.sendto(data, (BROADCAST_IP, UDP_DEST_PORT))
         time.sleep(1)
@@ -62,68 +73,137 @@ def init_tcp_server():
     except Exception as e:
         raise e
 
-def send_teams_andQ(conn):
-    questions = SimpleQuestions().getQ()
-    msg = "Welcome to Quick Maths.\nPlayer 1: " + TEAMS[0] + "\nPlayer 2: " + TEAMS[1] + \
+
+#should make it better somehow
+def getTeamName(conn , addr):
+    global TEAM1, TEAM2
+    end = time.time() + ANSWER_TIME
+    while time.time() < time.time()+50 :
+        try:
+            threadlock.acquire()
+            if TEAM1 == "":
+                print("check1")
+                TEAM1 = conn.recv(MESSAGE_LENGTH).decode(FORMAT)
+                threadlock.release()
+                break
+            elif TEAM2 == "":
+                TEAM2 = conn.recv(MESSAGE_LENGTH).decode(FORMAT)
+                print("check2")
+                threadlock.release()
+                break
+        except :
+            pass
+
+def send_teams_andQ():
+    questions = QuestionsBank().random_question()
+    msg = "Welcome to Quick Maths.\nPlayer 1: " + TEAM1 + "\nPlayer 2: " + TEAM2 + \
           f"\n====\n Please answer the following question as fast as you can: \n {questions[0]}\n"
     msg = msg.encode(FORMAT)
-    conn.sendall(msg)
-    return questions[1]
+    try:
+        SCK1.sendall(msg)
+        SCK2.sendall(msg)
+        return questions[1]
+    except:
+        pass
 
-def reset():
-    global  CONNECTED_CLIENTS
-    CONNECTED_CLIENTS = 0
-
-def get_winner(conn, answer):
+#TODO: check for valid input (if its a number)
+def decide_winner(answer):
     end = time.time() + ANSWER_TIME
-    while time.time() < end:
+    winner = False
+    team =""
+    while time.time() < end and not winner:
         try:
-            data, address = tcpSocket.recvfrom(MESSAGE_LENGTH)
-            if data.decode(FORMAT) == answer:
-                if address==TEAMS_ADDRESSES[0]:
-                    return TEAMS[0]
-                else: return TEAMS[1]
+            if int(SCK1.recv(MESSAGE_LENGTH).decode(FORMAT)) == answer:
+                team = TEAM1
+                winner = True
+            elif int(SCK2.recv(MESSAGE_LENGTH).decode(FORMAT)) == answer:
+                team = TEAM2
+                winner = True
             else:
-                if address==TEAMS_ADDRESSES[0]:
-                    return TEAMS[0]
-                else: return TEAMS[1]
+                print("no winner")
         except:
             pass
-    return "no winner"
+    message = "Game Over! \n"+\
+                 f"The correct answer was {answer}!\n"+\
+                 f"The Game ended with a draw!\n"
+    if winner:
+        message = "Game Over! \n"+\
+                 f"The correct answer was {answer}!\n"+\
+                 f"Congratulations to the winner: {team}\n"
+        message = message.encode(FORMAT)
+    try:
+        SCK1.sendall(message)
+        SCK2.sendall(message)
+    except:
+        pass
 
-def getTeamName(conn , addr):
-    TEAMS.append(conn.recv(MESSAGE_LENGTH).decode(FORMAT))
-    TEAMS_ADDRESSES.append(addr)
+
+
+def reset():
+    global  CONNECTED_CLIENTS, SCK1, SCK2
+    CONNECTED_CLIENTS = 0
+    SCK1 = None
+    SCK2 = None
 
 def start():
-    global CONNECTED_CLIENTS ,tcpSocket 
+    global CONNECTED_CLIENTS ,tcpSocket ,SCK1, SCK2
     broadcast = threading.Thread(target= udp_broadcast , args=()) #will make the broadcasting socket
     broadcast.start()
     init_tcp_server() #makes the tcp server
     print(f"Server started, listening on IP address {SERVER_IP}")
     threads = []
-
     while CONNECTED_CLIENTS < MAX_CLIENTS:
-        # lock
-        conn,addr = tcpSocket.accept()
-        thread = threading.Thread(target=getTeamName, args=(conn, addr))
-        threads.append(thread)
-        CONNECTED_CLIENTS += 1
-        # lock release
-
+        try:
+            conn,addr = tcpSocket.accept()
+            if CONNECTED_CLIENTS == 0: #MAYBE CHANGE
+                SCK1 = conn
+                print("client 1 connected")
+            else:
+                SCK2 = conn
+                print("client 2 connected")
+            thread = threading.Thread(target=getTeamName, args=(conn, addr))
+            threads.append(thread)
+            CONNECTED_CLIENTS += 1
+        except Exception as e:
+            raise e
     #2 users have joined
     broadcast.join()
     for thread in threads:
         thread.start()
     for thread in threads:
         thread.join()
+    if TEAM1 == "" or TEAM2 == "":
+        print("should start all over")
+    else:
+        answer = send_teams_andQ()
+        print("before decide winner")
+        decide_winner(answer)
+        print("after decide winner")
+        try:
+            SCK1.close()
+            SCK2.close()
+        except:
+            print("An exception occurred")
 
-    answer = send_teams_andQ(conn)
-    winner = get_winner(conn, answer)
-    print(f"Game over!\nThe correct answer was {answer}!\n\n")
-    #continue
-
-    conn.close()
 
 if __name__ == "__main__":
         start()
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
